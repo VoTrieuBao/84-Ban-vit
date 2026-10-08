@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Space Invaders Retro</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+    body {
+      background: #050508;
+      color: #00ff66;
+      font-family: 'Courier New', monospace;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      overflow: hidden;
+    }
+    #game-container {
+      position: relative;
+      border: 3px solid #00ff66;
+      border-radius: 8px;
+      box-shadow: 0 0 20px rgba(0, 255, 102, 0.4);
+      background: #000;
+    }
+    canvas { display: block; image-rendering: pixelated; }
+    #touch-controls {
+      display: none;
+      width: 100%;
+      max-width: 480px;
+      margin-top: 10px;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 0 10px;
+    }
+    .btn {
+      background: #111;
+      color: #00ff66;
+      border: 2px solid #00ff66;
+      border-radius: 8px;
+      padding: 14px 20px;
+      font-size: 16px;
+      font-weight: bold;
+      touch-action: manipulation;
+    }
+    .btn:active { background: #00ff66; color: #000; }
+    @media (max-width: 768px) { #touch-controls { display: flex; } }
+  </style>
+</head>
+<body>
+
+  <div id="game-container">
+    <canvas id="gameCanvas" width="480" height="600"></canvas>
+  </div>
+
+  <div id="touch-controls">
+    <button class="btn" id="btnLeft">◄ TRÁI</button>
+    <button class="btn" id="btnShoot" style="flex-grow: 1; border-color: #ff0055; color: #ff0055;">BẮN</button>
+    <button class="btn" id="btnRight">PHẢI ►</button>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    function playBeep(freq, duration, type = 'square') {
+      try {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+        gain.gain.setValueAtTime(0.08, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + duration);
+      } catch (e) {}
+    }
+
+    let score = 0;
+    let lives = 3;
+    let gameOver = false;
+    let gameWon = false;
+
+    const player = { x: 220, y: 550, width: 36, height: 20, speed: 5, movingLeft: false, movingRight: false };
+    let bullets = [];
+    let enemyBullets = [];
+
+    const aliens = [];
+    const rows = 4;
+    const cols = 8;
+    let alienDirection = 1;
+    let alienSpeed = 0.8;
+
+    function initAliens() {
+      aliens.length = 0;
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          aliens.push({
+            x: 40 + c * 50,
+            y: 70 + r * 35,
+            width: 30,
+            height: 22,
+            alive: true,
+            color: r === 0 ? '#ff0055' : (r < 2 ? '#ffb700' : '#00ffff')
+          });
+        }
+      }
+    }
+    initAliens();
+
+    window.addEventListener('keydown', (e) => {
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      if (e.code === 'ArrowLeft' || e.key === 'a') player.movingLeft = true;
+      if (e.code === 'ArrowRight' || e.key === 'd') player.movingRight = true;
+      if (e.code === 'Space') shoot();
+      if (gameOver && e.code === 'KeyR') resetGame();
+    });
+
+    window.addEventListener('keyup', (e) => {
+      if (e.code === 'ArrowLeft' || e.key === 'a') player.movingLeft = false;
+      if (e.code === 'ArrowRight' || e.key === 'd') player.movingRight = false;
+    });
+
+    const btnLeft = document.getElementById('btnLeft');
+    const btnRight = document.getElementById('btnRight');
+    const btnShoot = document.getElementById('btnShoot');
+
+    btnLeft.ontouchstart = (e) => { e.preventDefault(); player.movingLeft = true; };
+    btnLeft.ontouchend = () => { player.movingLeft = false; };
+    btnRight.ontouchstart = (e) => { e.preventDefault(); player.movingRight = true; };
+    btnRight.ontouchend = () => { player.movingRight = false; };
+    btnShoot.ontouchstart = (e) => { e.preventDefault(); shoot(); };
+
+    function shoot() {
+      if (gameOver) { resetGame(); return; }
+      if (bullets.length < 2) {
+        bullets.push({ x: player.x + player.width / 2 - 2, y: player.y, width: 4, height: 10 });
+        playBeep(880, 0.08);
+      }
+    }
+
+    function resetGame() {
+      score = 0;
+      lives = 3;
+      gameOver = false;
+      gameWon = false;
+      bullets = [];
+      enemyBullets = [];
+      player.x = 220;
+      initAliens();
+    }
+
+    function update() {
+      if (gameOver) return;
+
+      if (player.movingLeft && player.x > 10) player.x -= player.speed;
+      if (player.movingRight && player.x < canvas.width - player.width - 10) player.x += player.speed;
+
+      bullets.forEach((b, i) => {
+        b.y -= 7;
+        if (b.y < 0) bullets.splice(i, 1);
+      });
+
+      let hitEdge = false;
+      aliens.forEach(alien => {
+        if (!alien.alive) return;
+        alien.x += alienSpeed * alienDirection;
+        if (alien.x + alien.width > canvas.width - 10 || alien.x < 10) hitEdge = true;
+        if (alien.y + alien.height >= player.y) gameOver = true;
+      });
+
+      if (hitEdge) {
+        alienDirection *= -1;
+        aliens.forEach(alien => { alien.y += 12; });
+      }
+
+      if (Math.random() < 0.02) {
+        const liveAliens = aliens.filter(a => a.alive);
+        if (liveAliens.length > 0) {
+          const shooter = liveAliens[Math.floor(Math.random() * liveAliens.length)];
+          enemyBullets.push({ x: shooter.x + shooter.width / 2, y: shooter.y + shooter.height, width: 4, height: 10 });
+        }
+      }
+
+      enemyBullets.forEach((eb, i) => {
+        eb.y += 4;
+        if (eb.y > canvas.height) enemyBullets.splice(i, 1);
+
+        if (eb.x > player.x && eb.x < player.x + player.width &&
+            eb.y > player.y && eb.y < player.y + player.height) {
+          enemyBullets.splice(i, 1);
+          lives--;
+          playBeep(150, 0.3, 'sawtooth');
+          if (lives <= 0) gameOver = true;
+        }
+      });
+
+      bullets.forEach((b, bi) => {
+        aliens.forEach(alien => {
+          if (alien.alive && b.x > alien.x && b.x < alien.x + alien.width &&
+              b.y > alien.y && b.y < alien.y + alien.height) {
+            alien.alive = false;
+            bullets.splice(bi, 1);
+            score += 20;
+            playBeep(440, 0.1);
+          }
+        });
+      });
+
+      if (aliens.every(a => !a.alive)) {
+        gameWon = true;
+        gameOver = true;
+      }
+    }
+
+    function draw() {
+      ctx.fillStyle = '#050508';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.fillStyle = '#00ff66';
+      ctx.font = '16px Courier New';
+      ctx.fillText(`SCORE: ${score}`, 20, 30);
+      ctx.fillText(`LIVES: ${'♥ '.repeat(lives)}`, canvas.width - 140, 30);
+
+      ctx.fillStyle = '#00ff66';
+      ctx.fillRect(player.x, player.y, player.width, player.height);
+      ctx.fillRect(player.x + player.width / 2 - 3, player.y - 6, 6, 6);
+
+      aliens.forEach(alien => {
+        if (!alien.alive) return;
+        ctx.fillStyle = alien.color;
+        ctx.fillRect(alien.x, alien.y, alien.width, alien.height);
+      });
+
+      ctx.fillStyle = '#ffff00';
+      bullets.forEach(b => ctx.fillRect(b.x, b.y, b.width, b.height));
+
+      ctx.fillStyle = '#ff0055';
+      enemyBullets.forEach(eb => ctx.fillRect(eb.x, eb.y, eb.width, eb.height));
+
+      if (gameOver) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.textAlign = 'center';
+        ctx.fillStyle = gameWon ? '#00ff66' : '#ff0055';
+        ctx.font = '28px Courier New';
+        ctx.fillText(gameWon ? 'CHIẾN THẮNG!' : 'GAME OVER', canvas.width / 2, canvas.height / 2 - 20);
+        ctx.fillStyle = '#fff';
+        ctx.font = '16px Courier New';
+        ctx.fillText('Bấm R hoặc Chạm nút Bắn để chơi lại', canvas.width / 2, canvas.height / 2 + 20);
+        ctx.textAlign = 'left';
+      }
+    }
+
+    function gameLoop() {
+      update();
+      draw();
+      requestAnimationFrame(gameLoop);
+    }
+    gameLoop();
+  </script>
+</body>
+</html>
